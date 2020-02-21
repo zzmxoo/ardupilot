@@ -74,7 +74,7 @@ def get_default_params(atype, binary):
         util.pexpect_close(sitl)
         sitl = util.start_SITL(binary, model=frame, home=home, speedup=10)
         mavproxy = util.start_MAVProxy_SITL(atype)
-        idx = mavproxy.expect('Saved [0-9]+ parameters to (\S+)')
+        mavproxy.expect('Saved [0-9]+ parameters to (\S+)')
     parmfile = mavproxy.match.group(1)
     dest = buildlogs_path('%s-defaults.parm' % atype)
     shutil.copy(parmfile, dest)
@@ -378,6 +378,7 @@ def run_step(step):
         "use_map": opts.map,
         "valgrind": opts.valgrind,
         "gdb": opts.gdb,
+        "lldb": opts.lldb,
         "gdbserver": opts.gdbserver,
         "breakpoints": opts.breakpoint,
         "disable_breakpoints": opts.disable_breakpoints,
@@ -681,6 +682,10 @@ if __name__ == "__main__":
                       action="store_true",
                       default=False,
                       help="show how long each test took to run")
+    parser.add_option("--validate-parameters",
+                      action="store_true",
+                      default=False,
+                      help="validate vehicle parameter files")
 
     group_build = optparse.OptionGroup(parser, "Build options")
     group_build.add_option("--no-configure",
@@ -723,6 +728,10 @@ if __name__ == "__main__":
                          default=False,
                          action='store_true',
                          help='run ArduPilot binaries under gdbserver')
+    group_sim.add_option("--lldb",
+                         default=False,
+                         action='store_true',
+                         help='run ArduPilot binaries under lldb')
     group_sim.add_option("-B", "--breakpoint",
                          type='string',
                          action="append",

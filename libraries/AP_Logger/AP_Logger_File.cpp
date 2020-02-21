@@ -83,10 +83,14 @@ void AP_Logger_File::Init()
     }
     bufsize *= 1024;
 
+    const uint32_t desired_bufsize = bufsize;
+
     // If we can't allocate the full size, try to reduce it until we can allocate it
     while (!_writebuf.set_size(bufsize) && bufsize >= _writebuf_chunk) {
-        hal.console->printf("AP_Logger_File: Couldn't set buffer size to=%u\n", (unsigned)bufsize);
-        bufsize >>= 1;
+        bufsize *= 0.9;
+    }
+    if (bufsize >= _writebuf_chunk && bufsize != desired_bufsize) {
+        hal.console->printf("AP_Logger: reduced buffer %u/%u\n", (unsigned)bufsize, (unsigned)desired_bufsize);
     }
 
     if (!_writebuf.get_size()) {
@@ -125,6 +129,12 @@ bool AP_Logger_File::log_exists(const uint16_t lognum) const
 
 void AP_Logger_File::periodic_1Hz()
 {
+    if (_rotate_pending && !logging_enabled()) {
+        _rotate_pending = false;
+        // handle log rotation once we stop logging
+        stop_logging();
+    }
+
     if (!io_thread_alive()) {
         if (io_thread_warning_decimation_counter == 0 && _initialised) {
             // we don't print this error unless we did initialise. When _initialised is set to true
@@ -679,31 +689,6 @@ int16_t AP_Logger_File::get_log_data(const uint16_t list_entry, const uint16_t p
     }
     uint32_t ofs = page * (uint32_t)LOGGER_PAGE_SIZE + offset;
 
-    /*
-      this rather strange bit of code is here to work around a bug
-      in file offsets in NuttX. Every few hundred blocks of reads
-      (starting at around 350k into a file) NuttX will get the
-      wrong offset for sequential reads. The offset it gets is
-      typically 128k earlier than it should be. It turns out that
-      calling lseek() with 0 offset and SEEK_CUR works around the
-      bug. We can remove this once we find the real bug.
-    */
-    if (ofs / 4096 != (ofs+len) / 4096) {
-        off_t seek_current = AP::FS().lseek(_read_fd, 0, SEEK_CUR);
-        if (seek_current == (off_t)-1) {
-            AP::FS().close(_read_fd);
-            _read_fd = -1;
-            return -1;
-        }
-        if (seek_current != (off_t)_read_offset) {
-            if (AP::FS().lseek(_read_fd, _read_offset, SEEK_SET) == (off_t)-1) {
-                AP::FS().close(_read_fd);
-                _read_fd = -1;
-                return -1;
-            }
-        }
-    }
-
     if (ofs != _read_offset) {
         if (AP::FS().lseek(_read_fd, ofs, SEEK_SET) == (off_t)-1) {
             AP::FS().close(_read_fd);
@@ -791,7 +776,7 @@ void AP_Logger_File::PrepForArming()
 /*
   start writing to a new log file
  */
-uint16_t AP_Logger_File::start_new_log(void)
+void AP_Logger_File::start_new_log(void)
 {
     stop_logging();
 
@@ -800,7 +785,7 @@ uint16_t AP_Logger_File::start_new_log(void)
     if (_open_error) {
         // we have previously failed to open a file - don't try again
         // to prevent us trying to open files while in flight
-        return 0xFFFF;
+        return;
     }
 
     if (_read_fd != -1) {
@@ -811,7 +796,7 @@ uint16_t AP_Logger_File::start_new_log(void)
     if (disk_space_avail() < _free_space_min_avail && disk_space() > 0) {
         hal.console->printf("Out of space for logging\n");
         _open_error = true;
-        return 0xffff;
+        return;
     }
 
     uint16_t log_num = find_last_log();
@@ -824,7 +809,7 @@ uint16_t AP_Logger_File::start_new_log(void)
     }
     if (!write_fd_semaphore.take(1)) {
         _open_error = true;
-        return 0xFFFF;
+        return;
     }
     if (_write_filename) {
         free(_write_filename);
@@ -834,7 +819,7 @@ uint16_t AP_Logger_File::start_new_log(void)
     if (_write_filename == nullptr) {
         _open_error = true;
         write_fd_semaphore.give();
-        return 0xFFFF;
+        return;
     }
 
 #if CONFIG_HAL_BOARD == HAL_BOARD_CHIBIOS
@@ -856,7 +841,7 @@ uint16_t AP_Logger_File::start_new_log(void)
                  _write_filename, strerror(saved_errno));
         hal.console->printf("Log open fail for %s - %s\n",
                             _write_filename, strerror(saved_errno));
-        return 0xFFFF;
+        return;
     }
     _last_write_ms = AP_HAL::millis();
     _write_offset = 0;
@@ -873,7 +858,7 @@ uint16_t AP_Logger_File::start_new_log(void)
     free(fname);
     if (fd == -1) {
         _open_error = true;
-        return 0xFFFF;
+        return;
     }
 
     char buf[30];
@@ -884,10 +869,10 @@ uint16_t AP_Logger_File::start_new_log(void)
 
     if (written < to_write) {
         _open_error = true;
-        return 0xFFFF;
+        return;
     }
 
-    return log_num;
+    return;
 }
 
 
@@ -1073,7 +1058,7 @@ void AP_Logger_File::vehicle_was_disarmed()
         // rotate our log.  Closing the current one and letting the
         // logging restart naturally based on log_disarmed should do
         // the trick:
-        stop_logging();
+        _rotate_pending = true;
     }
 }
 

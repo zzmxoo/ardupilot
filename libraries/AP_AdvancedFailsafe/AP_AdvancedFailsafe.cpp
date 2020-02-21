@@ -27,6 +27,8 @@
 #include <AP_GPS/AP_GPS.h>
 #include <AP_Baro/AP_Baro.h>
 
+AP_AdvancedFailsafe *AP_AdvancedFailsafe::_singleton;
+
 extern const AP_HAL::HAL& hal;
 
 // table of user settable parameters
@@ -56,7 +58,7 @@ const AP_Param::GroupInfo AP_AdvancedFailsafe::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("WP_COMMS",    2, AP_AdvancedFailsafe, _wp_comms_hold, 0),
 
-    // @Param: GPS_LOSS
+    // @Param: WP_GPS_LOSS
     // @DisplayName: GPS Loss Waypoint
     // @Description: Waypoint number to navigate to on GPS lock loss
     // @User: Advanced
@@ -453,3 +455,12 @@ void AP_AdvancedFailsafe::max_range_update(void)
         _terminate.set_and_notify(1);
     }
 }
+
+namespace AP {
+
+AP_AdvancedFailsafe *advancedfailsafe()
+{
+    return AP_AdvancedFailsafe::get_singleton();
+}
+
+};

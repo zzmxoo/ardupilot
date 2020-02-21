@@ -56,18 +56,11 @@ class Board:
                 LUA_32BITS = 1,
                 )
 
-            env.ROMFS_FILES += [
-                ('sandbox.lua', 'libraries/AP_Scripting/scripts/sandbox.lua'),
-                ]
-
             env.AP_LIBRARIES += [
                 'AP_Scripting',
                 'AP_Scripting/lua/src',
                 ]
 
-            env.CXXFLAGS += [
-                '-DHAL_HAVE_AP_ROMFS_EMBEDDED_H'
-                ]
         else:
             cfg.options.disable_scripting = True;
 
@@ -94,6 +87,11 @@ class Board:
             cfg.srcnode.find_dir('libraries/AP_Common/missing').abspath()
         ])
 
+    def cc_version_gte(self, cfg, want_major, want_minor):
+        (major, minor, patchlevel) = cfg.env.CC_VERSION
+        return (int(major) > want_major or
+                (int(major) == want_major and int(minor) >= want_minor))
+
     def configure_env(self, cfg, env):
         # Use a dictionary instead of the convetional list for definitions to
         # make easy to override them. Convert back to list before consumption.
@@ -106,7 +104,7 @@ class Board:
 
             '-Wall',
             '-Wextra',
-            '-Wformat',
+            '-Werror=format',
             '-Wpointer-arith',
             '-Wcast-align',
             '-Wundef',
@@ -124,7 +122,6 @@ class Board:
             '-Werror=overflow',
             '-Werror=parentheses',
             '-Werror=format-extra-args',
-            '-Werror=delete-non-virtual-dtor',
             '-Werror=ignored-qualifiers',
         ]
 
@@ -141,7 +138,16 @@ class Board:
                 '-Wno-inconsistent-missing-override',
                 '-Wno-mismatched-tags',
                 '-Wno-gnu-variable-sized-type-not-at-end',
+                '-Werror=implicit-fallthrough',
             ]
+        else:
+            env.CFLAGS += [
+                '-Wno-format-contains-nul',
+            ]
+            if self.cc_version_gte(cfg, 7, 4):
+                env.CXXFLAGS += [
+                    '-Werror=implicit-fallthrough',
+                ]
 
         if cfg.env.DEBUG:
             env.CFLAGS += [
@@ -166,7 +172,6 @@ class Board:
 
             '-Wall',
             '-Wextra',
-            '-Wformat',
             '-Wpointer-arith',
             '-Wcast-align',
             '-Wundef',
@@ -180,6 +185,7 @@ class Board:
             '-Werror=format-security',
             '-Werror=format-extra-args',
             '-Werror=enum-compare',
+            '-Werror=format',
             '-Werror=array-bounds',
             '-Werror=uninitialized',
             '-Werror=init-self',
@@ -190,7 +196,9 @@ class Board:
             '-Werror=type-limits',
             '-Werror=unused-result',
             '-Werror=shadow',
+            '-Werror=unused-value',
             '-Werror=unused-variable',
+            '-Werror=delete-non-virtual-dtor',
             '-Wfatal-errors',
             '-Wno-trigraphs',
             '-Werror=parentheses',
@@ -222,15 +230,20 @@ class Board:
                 '-Wno-gnu-designator',
                 '-Wno-mismatched-tags',
                 '-Wno-gnu-variable-sized-type-not-at-end',
+                '-Werror=implicit-fallthrough',
             ]
         else:
             env.CXXFLAGS += [
+                '-Wno-format-contains-nul',
                 '-Werror=unused-but-set-variable'
             ]
-            (major, minor, patchlevel) = cfg.env.CC_VERSION
-            if int(major) >= 5 and int(minor) > 1 and not self.with_uavcan:
+            if self.cc_version_gte(cfg, 5, 2):
                 env.CXXFLAGS += [
                     '-Werror=suggest-override',
+                ]
+            if self.cc_version_gte(cfg, 7, 4):
+                env.CXXFLAGS += [
+                    '-Werror=implicit-fallthrough',
                 ]
 
         if cfg.env.DEBUG:
@@ -268,7 +281,7 @@ class Board:
                 cfg.srcnode.find_dir('modules/uavcan/libuavcan/include').abspath()
             ]
 
-        if cfg.env.build_dates:
+        if cfg.options.build_dates:
             env.build_dates = True
 
         # We always want to use PRI format macros
@@ -293,7 +306,7 @@ class Board:
         '''embed some files using AP_ROMFS'''
         import embed
         header = ctx.bldnode.make_node('ap_romfs_embedded.h').abspath()
-        if not embed.create_embedded_h(header, ctx.env.ROMFS_FILES):
+        if not embed.create_embedded_h(header, ctx.env.ROMFS_FILES, ctx.env.ROMFS_UNCOMPRESSED):
             ctx.fatal("Failed to created ap_romfs_embedded.h")
 
 Board = BoardMeta('Board', Board.__bases__, dict(Board.__dict__))
@@ -425,7 +438,6 @@ class chibios(Board):
 
         env.DEFINES.update(
             CONFIG_HAL_BOARD = 'HAL_BOARD_CHIBIOS',
-            HAVE_OCLOEXEC = 0,
             HAVE_STD_NULLPTR_T = 0,
         )
 
@@ -601,6 +613,16 @@ class linux(Board):
             waflib.Options.commands.append('rsync')
             # Avoid infinite recursion
             bld.options.upload = False
+
+class navigator(linux):
+    toolchain = 'arm-linux-gnueabihf'
+
+    def configure_env(self, cfg, env):
+        super(navigator, self).configure_env(cfg, env)
+
+        env.DEFINES.update(
+            CONFIG_HAL_BOARD_SUBTYPE='HAL_BOARD_SUBTYPE_LINUX_NAVIGATOR',
+        )
 
 class erleboard(linux):
     toolchain = 'arm-linux-gnueabihf'

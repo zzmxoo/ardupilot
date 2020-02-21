@@ -17,6 +17,7 @@
 #include <SITL/SIM_Rover.h>
 #include <SITL/SIM_BalanceBot.h>
 #include <SITL/SIM_Sailboat.h>
+#include <SITL/SIM_MotorBoat.h>
 #include <SITL/SIM_CRRCSim.h>
 #include <SITL/SIM_Gazebo.h>
 #include <SITL/SIM_last_letter.h>
@@ -106,11 +107,17 @@ static const struct {
     { "quad",               MultiCopter::create },
     { "copter",             MultiCopter::create },
     { "x",                  MultiCopter::create },
+    { "bfxrev",             MultiCopter::create },
     { "bfx",                MultiCopter::create },
     { "djix",               MultiCopter::create },
     { "cwx",                MultiCopter::create },
     { "hexa",               MultiCopter::create },
+    { "hexa-cwx",           MultiCopter::create },
+    { "hexa-dji",           MultiCopter::create },
     { "octa",               MultiCopter::create },
+    { "octa-cwx",           MultiCopter::create },
+    { "octa-dji",           MultiCopter::create },
+    { "octa-quad-cwx",      MultiCopter::create },
     { "dodeca-hexa",        MultiCopter::create },
     { "tri",                MultiCopter::create },
     { "y6",                 MultiCopter::create },
@@ -122,6 +129,7 @@ static const struct {
     { "rover",              SimRover::create },
     { "balancebot",         BalanceBot::create },
     { "sailboat",           Sailboat::create },
+    { "motorboat",          MotorBoat::create },
     { "crrcsim",            CRRCSim::create },
     { "jsbsim",             JSBSim::create },
     { "flightaxis",         FlightAxis::create },
@@ -132,6 +140,7 @@ static const struct {
     { "plane",              Plane::create },
     { "calibration",        Calibration::create },
     { "vectored",           Submarine::create },
+    { "vectored_6dof",      Submarine::create },
     { "silentwings",        SilentWings::create },
     { "morse",              Morse::create },
     { "airsim",             AirSim::create},
@@ -368,7 +377,13 @@ void SITL_State::_parse_command_line(int argc, char * const argv[])
     }
 
     if (!model_str) {
-        printf("You must specify a vehicle model\n");
+        printf("You must specify a vehicle model.  Options are:\n");
+        for (uint8_t i=0; i < ARRAY_SIZE(model_constructors); i++) {
+            printf("  %s\n", model_constructors[i].name);
+        }
+        // spit this out again as the original message probably just
+        // scrolled off the screen:
+        printf("You must specify a vehicle model.\n");
         exit(1);
     }
 

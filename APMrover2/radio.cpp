@@ -26,7 +26,7 @@ void Rover::set_control_channels(void)
         // For a rover safety is TRIM throttle
         g2.motors.setup_safety_output();
     }
-    // setup correct scaling for ESCs like the UAVCAN PX4ESC which
+    // setup correct scaling for ESCs like the UAVCAN ESCs which
     // take a proportion of speed. Default to 1000 to 2000 for systems without
     // a k_throttle output
     hal.rcout->set_esc_scaling(1000, 2000);
@@ -135,7 +135,7 @@ void Rover::radio_failsafe_check(uint16_t pwm)
     if (AP_HAL::millis() - failsafe.last_valid_rc_ms > 500) {
         failed = true;
     }
-    failsafe_trigger(FAILSAFE_EVENT_THROTTLE, failed);
+    failsafe_trigger(FAILSAFE_EVENT_THROTTLE, "Radio", failed);
 }
 
 bool Rover::trim_radio()

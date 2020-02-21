@@ -23,7 +23,6 @@
 #include <AP_Common/AP_Common.h>
 #include <AP_Param/AP_Param.h>
 #include <AP_Mission/AP_Mission.h>
-#include <AP_RCMapper/AP_RCMapper.h>
 #include <inttypes.h>
 
 
@@ -48,17 +47,30 @@ public:
         TERMINATE_ACTION_LAND      = 43
     };
 
+    /* Do not allow copies */
+    AP_AdvancedFailsafe(const AP_AdvancedFailsafe &other) = delete;
+    AP_AdvancedFailsafe &operator=(const AP_AdvancedFailsafe&) = delete;
+
     // Constructor
     AP_AdvancedFailsafe(AP_Mission &_mission) :
         mission(_mission)
         {
             AP_Param::setup_object_defaults(this, var_info);
-            
+            if (_singleton != nullptr) {
+                AP_HAL::panic("AP_Logger must be singleton");
+            }
+
+            _singleton = this;
             _state = STATE_PREFLIGHT;
             _terminate.set(0);
-            
+
             _saved_wp = 0;
         }
+
+    // get singleton instance
+    static AP_AdvancedFailsafe *get_singleton(void) {
+        return _singleton;
+    }
 
     bool enabled() { return _enable; }
 
@@ -147,6 +159,12 @@ protected:
     bool check_altlimit(void);
 
 private:
+    static AP_AdvancedFailsafe *_singleton;
+
     // update maximum range check
     void max_range_update();
+};
+
+namespace AP {
+    AP_AdvancedFailsafe *advancedfailsafe();
 };

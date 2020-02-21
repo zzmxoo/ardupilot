@@ -24,27 +24,34 @@ if [ -z "$CI_BUILD_TARGET" ]; then
     CI_BUILD_TARGET="sitl linux fmuv3"
 fi
 
-declare -A waf_supported_boards
-
 waf=modules/waf/waf-light
-
-# get list of boards supported by the waf build
-for board in $($waf list_boards | head -n1); do waf_supported_boards[$board]=1; done
 
 echo "Targets: $CI_BUILD_TARGET"
 echo "Compiler: $c_compiler"
 
 pymavlink_installed=0
+mavproxy_installed=0
 
 function run_autotest() {
     NAME="$1"
     BVEHICLE="$2"
     RVEHICLE="$3"
 
+    if [ $mavproxy_installed -eq 0 ]; then
+        echo "Installing MAVProxy"
+        pushd /tmp
+          git clone --recursive https://github.com/ardupilot/MAVProxy
+          pushd MAVProxy
+            python setup.py build install --user --force
+          popd
+        popd
+        mavproxy_installed=1
+        # now uninstall the version of pymavlink pulled in by MAVProxy deps:
+        pip uninstall -y pymavlink
+    fi
     if [ $pymavlink_installed -eq 0 ]; then
         echo "Installing pymavlink"
-        git submodule init
-        git submodule update
+        git submodule update --init --recursive
         (cd modules/mavlink/pymavlink && python setup.py build install --user)
         pymavlink_installed=1
     fi
@@ -61,7 +68,7 @@ function run_autotest() {
     if [ "x$CI_BUILD_DEBUG" != "x" ]; then
         w="$w --debug"
     fi
-    Tools/autotest/autotest.py --waf-configure-args="$w" "$BVEHICLE" "$RVEHICLE"
+    Tools/autotest/autotest.py --show-test-timings --waf-configure-args="$w" "$BVEHICLE" "$RVEHICLE"
     ccache -s && ccache -z
 }
 
@@ -83,8 +90,21 @@ for t in $CI_BUILD_TARGET; do
         run_autotest "Rover" "build.APMrover2" "drive.APMrover2"
         continue
     fi
+    if [ "$t" == "sitltest-tracker" ]; then
+        run_autotest "Tracker" "build.AntennaTracker" "test.AntennaTracker"
+        continue
+    fi
+    if [ "$t" == "sitltest-balancebot" ]; then
+        run_autotest "BalanceBot" "build.APMrover2" "drive.BalanceBot"
+        continue
+    fi
     if [ "$t" == "sitltest-sub" ]; then
         run_autotest "Sub" "build.ArduSub" "dive.ArduSub"
+        continue
+    fi
+
+    if [ "$t" == "unit-tests" ]; then
+        run_autotest "Unit Tests" "build.unit_tests" "run.unit_tests"
         continue
     fi
 
@@ -98,11 +118,19 @@ for t in $CI_BUILD_TARGET; do
 
     if [ "$t" == "periph-build" ]; then
         echo "Building f103 bootloader"
-        $waf configure --board f103-periph --bootloader
+        $waf configure --board f103-GPS --bootloader
         $waf clean
         $waf bootloader
         echo "Building f103 peripheral fw"
-        $waf configure --board f103-periph
+        $waf configure --board f103-GPS
+        $waf clean
+        $waf AP_Periph
+        echo "Building f303 bootloader"
+        $waf configure --board f303-Universal --bootloader
+        $waf clean
+        $waf bootloader
+        echo "Building f303 peripheral fw"
+        $waf configure --board f303-Universal
         $waf clean
         $waf AP_Periph
         continue
@@ -154,7 +182,7 @@ for t in $CI_BUILD_TARGET; do
         continue
     fi
 
-    if [[ -n ${waf_supported_boards[$t]} && -z ${CI_CRON_JOB+1} ]]; then
+    if [[ -z ${CI_CRON_JOB+1} ]]; then
         echo "Starting waf build for board ${t}..."
         $waf configure --board "$t" \
                 --enable-benchmarks \

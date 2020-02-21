@@ -90,8 +90,15 @@ public:
      */
     virtual uint64_t get_hw_rtc() const;
 
+    enum class FlashBootloader {
+        OK=0,
+        NO_CHANGE=1,
+        FAIL=2,
+        NOT_AVAILABLE=3,
+    };
+
     // overwrite bootloader (probably with one from ROMFS)
-    virtual bool flash_bootloader() { return false; }
+    virtual FlashBootloader flash_bootloader() { return FlashBootloader::NOT_AVAILABLE; }
 
     /*
       get system identifier (eg. serial number)
@@ -162,6 +169,9 @@ public:
       initialise (or re-initialise) filesystem storage
      */
     virtual bool fs_init(void) { return false; }
+
+    // attempt to trap the processor, presumably to enter an attached debugger
+    virtual bool trap() const { return false; }
 
 protected:
     // we start soft_armed false, so that actuators don't send any

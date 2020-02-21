@@ -25,8 +25,6 @@ Mode::Mode(void) :
     G_Dt(copter.G_Dt)
 { };
 
-float Mode::auto_takeoff_no_nav_alt_cm = 0;
-
 // return the static controller object corresponding to supplied mode
 Mode *Copter::mode_from_mode_num(const Mode::Number mode)
 {
@@ -159,6 +157,18 @@ Mode *Copter::mode_from_mode_num(const Mode::Number mode)
             break;
 #endif
 
+#if MODE_SYSTEMID_ENABLED == ENABLED
+        case Mode::Number::SYSTEMID:
+            ret = (Mode *)g2.mode_systemid_ptr;
+            break;
+#endif
+
+#if MODE_AUTOROTATE_ENABLED == ENABLED
+        case Mode::Number::AUTOROTATE:
+            ret = &mode_autorotate;
+            break;
+#endif
+
         default:
             break;
     }
@@ -171,7 +181,7 @@ Mode *Copter::mode_from_mode_num(const Mode::Number mode)
 // optional force parameter used to force the flight mode change (used only first time mode is set)
 // returns true if mode was successfully set
 // ACRO, STABILIZE, ALTHOLD, LAND, DRIFT and SPORT can always be set successfully but the return state of other flight modes should be checked and the caller should deal with failures appropriately
-bool Copter::set_mode(Mode::Number mode, mode_reason_t reason)
+bool Copter::set_mode(Mode::Number mode, ModeReason reason)
 {
 
     // return immediately if we are already in the desired mode
@@ -192,10 +202,21 @@ bool Copter::set_mode(Mode::Number mode, mode_reason_t reason)
 #if FRAME_CONFIG == HELI_FRAME
     // do not allow helis to enter a non-manual throttle mode if the
     // rotor runup is not complete
-    if (!ignore_checks && !new_flightmode->has_manual_throttle() && (motors->get_spool_state() == AP_Motors::SpoolState::SPOOLING_UP || motors->get_spool_state() == AP_Motors::SpoolState::SPOOLING_DOWN)) {
-        gcs().send_text(MAV_SEVERITY_WARNING,"Flight mode change failed");
-        AP::logger().Write_Error(LogErrorSubsystem::FLIGHT_MODE, LogErrorCode(mode));
-        return false;
+    if (!ignore_checks && !new_flightmode->has_manual_throttle() &&
+        (motors->get_spool_state() == AP_Motors::SpoolState::SPOOLING_UP || motors->get_spool_state() == AP_Motors::SpoolState::SPOOLING_DOWN)) {
+        #if MODE_AUTOROTATE_ENABLED == ENABLED
+            //if the mode being exited is the autorotation mode allow mode change despite rotor not being at
+            //full speed.  This will reduce altitude loss on bail-outs back to non-manual throttle modes
+            bool in_autorotation_check = (flightmode != &mode_autorotate || new_flightmode != &mode_autorotate);
+        #else
+            bool in_autorotation_check = false;
+        #endif
+
+        if (!in_autorotation_check) {
+            gcs().send_text(MAV_SEVERITY_WARNING,"Flight mode change failed");
+            AP::logger().Write_Error(LogErrorSubsystem::FLIGHT_MODE, LogErrorCode(mode));
+            return false;
+        }
     }
 #endif
 
@@ -235,8 +256,18 @@ bool Copter::set_mode(Mode::Number mode, mode_reason_t reason)
         return false;
     }
 
+#if MODE_ZIGZAG_ENABLED == ENABLED && SPRAYER_ENABLED == ENABLED
+    // The pump will stop if the flight mode is changed from ZigZag to other
+    if (control_mode == Mode::Number::ZIGZAG && g2.zigzag_auto_pump_enabled) {
+        copter.sprayer.run(false);
+    }
+#endif
+
     // perform any cleanup required by previous flight mode
     exit_mode(flightmode, new_flightmode);
+
+    // store previous flight mode (only used by tradeheli's autorotation)
+    prev_control_mode = control_mode;
 
     // update flight mode
     flightmode = new_flightmode;
@@ -265,6 +296,18 @@ bool Copter::set_mode(Mode::Number mode, mode_reason_t reason)
 
     // return success
     return true;
+}
+
+bool Copter::set_mode(const uint8_t new_mode, const ModeReason reason)
+{
+    static_assert(sizeof(Mode::Number) == sizeof(new_mode), "The new mode can't be mapped to the vehicles mode number");
+#ifdef DISALLOW_GCS_MODE_CHANGE_DURING_RC_FAILSAFE
+    if (reason == ModeReason::GCS_COMMAND && copter.failsafe.radio) {
+        // don't allow mode changes while in radio failsafe
+        return false;
+    }
+#endif
+    return copter.set_mode(static_cast<Mode::Number>(new_mode), ModeReason::GCS_COMMAND);
 }
 
 // update_flight_mode - calls the appropriate attitude controllers based on flight mode
@@ -314,6 +357,12 @@ void Copter::exit_mode(Mode *&old_flightmode,
     }
 #endif
 
+#if MODE_FOLLOW_ENABLED == ENABLED
+    if (old_flightmode == &mode_follow) {
+        mode_follow.exit();
+    }
+#endif
+
 #if FRAME_CONFIG == HELI_FRAME
     // firmly reset the flybar passthrough to false when exiting acro mode.
     if (old_flightmode == &mode_acro) {
@@ -351,6 +400,12 @@ void Mode::update_navigation()
 // returns desired angle in centi-degrees
 void Mode::get_pilot_desired_lean_angles(float &roll_out, float &pitch_out, float angle_max, float angle_limit) const
 {
+    // throttle failsafe check
+    if (copter.failsafe.radio || !copter.ap.rc_receiver_present) {
+        roll_out = 0;
+        pitch_out = 0;
+        return;
+    }
     // fetch roll and pitch inputs
     roll_out = channel_roll->get_control_in();
     pitch_out = channel_pitch->get_control_in();
@@ -467,17 +522,6 @@ int32_t Mode::get_alt_above_ground_cm(void)
 
 void Mode::land_run_vertical_control(bool pause_descent)
 {
-#if PRECISION_LANDING == ENABLED
-    const bool navigating = pos_control->is_active_xy();
-    bool doing_precision_landing = !copter.ap.land_repo_active && copter.precland.target_acquired() && navigating;
-#else
-    bool doing_precision_landing = false;
-#endif
-
-    // compute desired velocity
-    const float precland_acceptable_error = 15.0f;
-    const float precland_min_descent_speed = 10.0f;
-
     float cmb_rate = 0;
     if (!pause_descent) {
         float max_land_descent_velocity;
@@ -496,11 +540,20 @@ void Mode::land_run_vertical_control(bool pause_descent)
         // Constrain the demanded vertical velocity so that it is between the configured maximum descent speed and the configured minimum descent speed.
         cmb_rate = constrain_float(cmb_rate, max_land_descent_velocity, -abs(g.land_speed));
 
+#if PRECISION_LANDING == ENABLED
+        const bool navigating = pos_control->is_active_xy();
+        bool doing_precision_landing = !copter.ap.land_repo_active && copter.precland.target_acquired() && navigating;
+
         if (doing_precision_landing && copter.rangefinder_alt_ok() && copter.rangefinder_state.alt_cm > 35.0f && copter.rangefinder_state.alt_cm < 200.0f) {
+            // compute desired velocity
+            const float precland_acceptable_error = 15.0f;
+            const float precland_min_descent_speed = 10.0f;
+
             float max_descent_speed = abs(g.land_speed)*0.5f;
             float land_slowdown = MAX(0.0f, pos_control->get_horizontal_error()*(max_descent_speed/precland_acceptable_error));
             cmb_rate = MIN(-precland_min_descent_speed, -max_descent_speed+land_slowdown);
         }
+#endif
     }
 
     // update altitude target and call position controller
@@ -522,10 +575,10 @@ void Mode::land_run_horizontal_control()
     // process pilot inputs
     if (!copter.failsafe.radio) {
         if ((g.throttle_behavior & THR_BEHAVE_HIGH_THROTTLE_CANCELS_LAND) != 0 && copter.rc_throttle_control_in_filter.get() > LAND_CANCEL_TRIGGER_THR){
-            copter.Log_Write_Event(DATA_LAND_CANCELLED_BY_PILOT);
+            AP::logger().Write_Event(LogEvent::LAND_CANCELLED_BY_PILOT);
             // exit land if throttle is high
-            if (!set_mode(Mode::Number::LOITER, MODE_REASON_THROTTLE_LAND_ESCAPE)) {
-                set_mode(Mode::Number::ALT_HOLD, MODE_REASON_THROTTLE_LAND_ESCAPE);
+            if (!set_mode(Mode::Number::LOITER, ModeReason::THROTTLE_LAND_ESCAPE)) {
+                set_mode(Mode::Number::ALT_HOLD, ModeReason::THROTTLE_LAND_ESCAPE);
             }
         }
 
@@ -539,7 +592,7 @@ void Mode::land_run_horizontal_control()
             // record if pilot has overridden roll or pitch
             if (!is_zero(target_roll) || !is_zero(target_pitch)) {
                 if (!copter.ap.land_repo_active) {
-                    copter.Log_Write_Event(DATA_LAND_REPO_ACTIVE);
+                    AP::logger().Write_Event(LogEvent::LAND_REPO_ACTIVE);
                 }
                 copter.ap.land_repo_active = true;
             }
@@ -720,7 +773,7 @@ void Mode::update_simple_mode(void) {
     copter.update_simple_mode();
 }
 
-bool Mode::set_mode(Mode::Number mode, mode_reason_t reason)
+bool Mode::set_mode(Mode::Number mode, ModeReason reason)
 {
     return copter.set_mode(mode, reason);
 }
@@ -733,11 +786,6 @@ void Mode::set_land_complete(bool b)
 GCS_Copter &Mode::gcs()
 {
     return copter.gcs();
-}
-
-void Mode::Log_Write_Event(Log_Event id)
-{
-    return copter.logger.Write_Event(id);
 }
 
 void Mode::set_throttle_takeoff()

@@ -27,9 +27,9 @@ public:
     void update_soft_armed();
 
 protected:
+    // the following check functions do not call into AP_Arming
     bool oa_check(bool report);
+    bool parameter_checks(bool report);
+    bool mode_checks(bool report);
 
-private:
-
-    void change_arm_state(void);
 };
